@@ -1,0 +1,55 @@
+{
+  "name": "pi-batch-openrouter",
+  "version": "0.1.0",
+  "description": "Deterministic OpenRouter Batch API manager for Pi coding agent. Offload heavy goals & tasks at 50% discount with background tracking, statusline badge, and interactive TUI inspector.",
+  "type": "module",
+  "license": "MIT",
+  "author": "mastnacek",
+  "homepage": "https://github.com/mastnacek/pi-batch-openrouter#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mastnacek/pi-batch-openrouter.git"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi",
+    "openrouter",
+    "batch-api",
+    "claude-opus",
+    "async-goals",
+    "cost-optimization"
+  ],
+  "files": [
+    "index.ts",
+    "src",
+    "AGENTS.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "tsc"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-coding-agent": "0.86.0",
+    "@earendil-works/pi-tui": "^0.86.1",
+    "@types/node": "^22.20.4",
+    "typebox": "^1.3.34",
+    "typescript": "^5.9.3"
+  }
+}

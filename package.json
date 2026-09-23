@@ -34,7 +34,8 @@
   },
   "scripts": {
     "check": "tsc --noEmit",
-    "build": "tsc"
+    "build": "tsc",
+    "test": "node --test test/**/*.test.js"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

@@ -129,8 +129,10 @@ export function registerBatchCommand(
       const rest = tokens.slice(1).join(" ").trim();
 
       if (sub === "view" || sub === "ui" || sub === "dashboard") {
-        if (!ctx.hasUI) {
-          ctx.ui.notify("UI is not available in headless mode. Use /batch list instead.", "warning");
+        if (!ctx.hasUI || ctx.mode !== "tui") {
+          if (ctx.hasUI) {
+            ctx.ui.notify("UI is only available in TUI mode. Use /batch list instead.", "warning");
+          }
           return;
         }
 

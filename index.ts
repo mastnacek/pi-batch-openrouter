@@ -3,25 +3,21 @@ import { BatchStorage } from "./src/storage.js";
 import { BatchPoller } from "./src/poller.js";
 import { registerBatchCommand } from "./src/commands.js";
 import { registerBatchTools } from "./src/tools.js";
+import { resolveApiKeyForProvider } from "./src/models.js";
 
 const unsubs: Array<() => void> = [];
 
 export default function (pi: ExtensionAPI): void {
   const storage = new BatchStorage();
 
-  const getApiKey = (): string => {
-    // 1. Check environment variable
-    if (typeof process !== "undefined" && process.env?.OPENROUTER_API_KEY) {
-      return process.env.OPENROUTER_API_KEY;
-    }
-    return "";
-  };
-
   let activeCtx: ExtensionContext | null = null;
 
   const poller = new BatchPoller(
     storage,
-    getApiKey,
+    async (job) => {
+      if (!activeCtx) return "";
+      return resolveApiKeyForProvider(activeCtx, job.provider);
+    },
     (badgeText) => {
       if (activeCtx?.hasUI) {
         if (badgeText) {
@@ -34,15 +30,15 @@ export default function (pi: ExtensionAPI): void {
     (job) => {
       if (activeCtx?.hasUI) {
         activeCtx.ui.notify(
-          `📦 Batch completed: ${job.title}\nSaved to: ${job.outputDir || "results"}\nInspect with /batch view`,
+          `📦 Batch completed: ${job.title} [${job.provider}]\nSaved to: ${job.outputDir || "results"}\nInspect with /batch view`,
           "info"
         );
       }
     }
   );
 
-  registerBatchCommand(pi, storage, poller, getApiKey);
-  registerBatchTools(pi, storage, poller, getApiKey);
+  registerBatchCommand(pi, storage, poller, () => activeCtx);
+  registerBatchTools(pi, storage, poller, () => activeCtx);
 
   unsubs.push(
     pi.on("session_start", (_event, ctx) => {

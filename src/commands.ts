@@ -1,9 +1,10 @@
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteItem } from "@earendil-works/pi-tui";
 import type { BatchStorage } from "./storage.js";
 import type { BatchPoller } from "./poller.js";
 import { OpenRouterBatchClient } from "./client.js";
 import { BatchDashboardComponent } from "./dashboard.js";
+import { discoverBatchModels, normalizeBatchModelSlug, resolveApiKeyForProvider } from "./models.js";
 import type { BatchJob } from "./types.js";
 
 const SUBCOMMANDS: Record<string, { desc: string; nonTerminal: boolean }> = {
@@ -12,22 +13,15 @@ const SUBCOMMANDS: Record<string, { desc: string; nonTerminal: boolean }> = {
   goal: { desc: "Submit an asynchronous goal prompt", nonTerminal: false },
   check: { desc: "Trigger immediate status poll", nonTerminal: false },
   cancel: { desc: "Cancel a running batch job", nonTerminal: true },
-  model: { desc: "Set or inspect default batch model", nonTerminal: true },
+  model: { desc: "Select batch model from active registry", nonTerminal: true },
+  provider: { desc: "Select default OpenRouter account/provider", nonTerminal: true },
 };
-
-const POPULAR_BATCH_MODELS = [
-  "anthropic/claude-opus-5.5",
-  "anthropic/claude-sonnet-4.5",
-  "openai/gpt-5-mini",
-  "openai/gpt-4o",
-  "deepseek/deepseek-r1",
-];
 
 export function registerBatchCommand(
   pi: ExtensionAPI,
   storage: BatchStorage,
   poller: BatchPoller,
-  getApiKey: () => string
+  getCtx: () => ExtensionContext | null
 ): void {
   pi.registerCommand("batch", {
     description: "Manage OpenRouter asynchronous batch jobs & goals",
@@ -37,7 +31,7 @@ export function registerBatchCommand(
       const normalizedPrefix = tokens.join(" ").toLowerCase();
       const firstToken = tokens[0]?.toLowerCase();
 
-      const NON_TERMINAL = new Set(["cancel", "model"]);
+      const NON_TERMINAL = new Set(["cancel", "model", "provider"]);
 
       if (
         tokens.length > 1 ||
@@ -51,22 +45,60 @@ export function registerBatchCommand(
           const items = active.map((j) => ({
             value: `cancel ${j.id}`,
             label: j.id,
-            description: `${j.title.slice(0, 30)} (${j.status})`,
+            description: `[${j.provider}] ${j.title.slice(0, 24)} (${j.status})`,
           }));
           const filtered = items.filter((i) => i.value.toLowerCase().startsWith(normalizedPrefix));
           return filtered.length > 0 ? filtered : null;
         }
 
-        if (cmd === "model") {
-          const current = storage.getConfig().defaultModel;
-          const items = POPULAR_BATCH_MODELS.map((m) => {
-            const isActive = m === current;
+        if (cmd === "provider") {
+          const ctx = getCtx();
+          const current = storage.getConfig().defaultProvider;
+          const providers = new Set<string>(["openrouter"]);
+
+          if (ctx) {
+            for (const m of ctx.modelRegistry.getAll()) {
+              if (m.provider === "openrouter" || m.provider.startsWith("openrouter-")) {
+                providers.add(m.provider);
+              }
+            }
+          }
+
+          const items = Array.from(providers).map((p) => {
+            const isActive = p === current;
             return {
-              value: `model ${m}`,
-              label: isActive ? `${m} ✓` : m,
-              description: isActive ? `Set batch model · ● AKTIVNÍ` : `Set batch model`,
+              value: `provider ${p}`,
+              label: isActive ? `${p} ✓` : p,
+              description: isActive ? `Account provider · ● AKTIVNÍ` : `Account provider`,
             };
           });
+
+          const filtered = items.filter((i) => i.value.toLowerCase().startsWith(normalizedPrefix));
+          return filtered.length > 0 ? filtered : null;
+        }
+
+        if (cmd === "model") {
+          const ctx = getCtx();
+          const currentModel = storage.getConfig().defaultModel;
+          const currentProv = storage.getConfig().defaultProvider;
+
+          let modelOptions = ctx ? discoverBatchModels(ctx) : [];
+          // Filter to models matching current selected provider if possible, else all
+          const provModels = modelOptions.filter((m) => m.provider === currentProv);
+          if (provModels.length > 0) {
+            modelOptions = provModels;
+          }
+
+          const items = modelOptions.map((opt) => {
+            const isActive = opt.modelId === currentModel;
+            const marker = isActive ? " ✓" : "";
+            return {
+              value: `model ${opt.modelId}`,
+              label: `${opt.modelId}${marker}`,
+              description: `[${opt.provider}] ${isActive ? "· ● AKTIVNÍ" : ""}`,
+            };
+          });
+
           const filtered = items.filter((i) => i.value.toLowerCase().startsWith(normalizedPrefix));
           return filtered.length > 0 ? filtered : null;
         }
@@ -108,9 +140,11 @@ export function registerBatchCommand(
             jobs,
             () => onDone(undefined),
             async (jobId: string) => {
-              const apiKey = getApiKey();
+              const job = storage.getJob(jobId);
+              const prov = job?.provider || storage.getConfig().defaultProvider;
+              const apiKey = await resolveApiKeyForProvider(ctx, prov);
               if (!apiKey) {
-                ctx.ui.notify("Missing API key", "error");
+                ctx.ui.notify(`Missing API key for provider: ${prov}`, "error");
                 return;
               }
               const client = new OpenRouterBatchClient(apiKey);
@@ -144,17 +178,17 @@ export function registerBatchCommand(
 
         const lines = [
           "📦 OpenRouter Batch Jobs:",
-          "ID             Status        Progress   Model              Title",
-          "─".repeat(75),
+          "ID             Status        Progress   Provider/Model             Title",
+          "─".repeat(82),
         ];
 
         for (const j of jobs) {
           const id = j.id.slice(0, 12).padEnd(14);
           const st = j.status.padEnd(13);
           const pr = `${j.completedRequests}/${j.totalRequests}`.padEnd(10);
-          const md = j.model.replace("anthropic/", "").padEnd(18);
-          const ti = j.title.slice(0, 30);
-          lines.push(`${id} ${st} ${pr} ${md} ${ti}`);
+          const pm = `[${j.provider}] ${j.model.replace("anthropic/", "")}`.slice(0, 26).padEnd(27);
+          const ti = j.title.slice(0, 26);
+          lines.push(`${id} ${st} ${pr} ${pm} ${ti}`);
         }
         ctx.ui.notify(lines.join("\n"), "info");
         return;
@@ -167,10 +201,22 @@ export function registerBatchCommand(
         return;
       }
 
+      if (sub === "provider") {
+        if (!rest) {
+          const curr = storage.getConfig().defaultProvider;
+          ctx.ui.notify(`Current default batch provider: ${curr}`, "info");
+          return;
+        }
+        storage.updateConfig({ defaultProvider: rest });
+        ctx.ui.notify(`Default batch provider set to: ${rest}`, "info");
+        return;
+      }
+
       if (sub === "model") {
         if (!rest) {
           const curr = storage.getConfig().defaultModel;
-          ctx.ui.notify(`Current default batch model: ${curr}`, "info");
+          const currP = storage.getConfig().defaultProvider;
+          ctx.ui.notify(`Current default batch model: ${curr} [${currP}]`, "info");
           return;
         }
         storage.updateConfig({ defaultModel: rest });
@@ -183,15 +229,16 @@ export function registerBatchCommand(
           ctx.ui.notify("Usage: /batch cancel <batch_id>", "error");
           return;
         }
-        const apiKey = getApiKey();
+        const job = storage.getJob(rest);
+        const prov = job?.provider || storage.getConfig().defaultProvider;
+        const apiKey = await resolveApiKeyForProvider(ctx, prov);
         if (!apiKey) {
-          ctx.ui.notify("Missing OpenRouter API key", "error");
+          ctx.ui.notify(`Missing API key for provider ${prov}`, "error");
           return;
         }
         try {
           const client = new OpenRouterBatchClient(apiKey);
           await client.cancelBatch(rest);
-          const job = storage.getJob(rest);
           if (job) {
             job.status = "cancelled";
             storage.saveJob(job);
@@ -209,19 +256,22 @@ export function registerBatchCommand(
           ctx.ui.notify("Usage: /batch goal <prompt / description>", "error");
           return;
         }
-        const apiKey = getApiKey();
+        const config = storage.getConfig();
+        const prov = config.defaultProvider;
+        const apiKey = await resolveApiKeyForProvider(ctx, prov);
         if (!apiKey) {
-          ctx.ui.notify("Missing OpenRouter API key. Please export OPENROUTER_API_KEY.", "error");
+          ctx.ui.notify(`Missing API key for provider: ${prov}. Check auth.json or OPENROUTER_API_KEY.`, "error");
           return;
         }
 
-        const model = storage.getConfig().defaultModel;
+        const rawModel = config.defaultModel;
+        const normalizedModel = normalizeBatchModelSlug(rawModel);
         const client = new OpenRouterBatchClient(apiKey);
 
-        ctx.ui.notify(`Submitting batch goal using ${model}...`, "info");
+        ctx.ui.notify(`Submitting batch goal using ${normalizedModel} on [${prov}]...`, "info");
 
         try {
-          const res = await client.submitBatch(model, [
+          const res = await client.submitBatch(normalizedModel, [
             {
               custom_id: "goal-1",
               body: {
@@ -243,7 +293,8 @@ export function registerBatchCommand(
           const newJob: BatchJob = {
             id: res.id,
             title: rest.slice(0, 60),
-            model,
+            model: normalizedModel,
+            provider: prov,
             status: res.status,
             createdAt: Date.now(),
             totalRequests: 1,
@@ -260,14 +311,14 @@ export function registerBatchCommand(
 
           storage.saveJob(newJob);
           poller.updateBadge();
-          ctx.ui.notify(`✅ Batch goal submitted!\nID: ${res.id}\nTrack status with /batch view`, "info");
+          ctx.ui.notify(`✅ Batch goal submitted!\nID: ${res.id}\nProvider: ${prov}\nTrack with /batch view`, "info");
         } catch (err) {
           ctx.ui.notify(`Failed to submit batch: ${String(err)}`, "error");
         }
         return;
       }
 
-      ctx.ui.notify(`Unknown subcommand: ${sub}. See /batch view | list | goal | check | cancel | model`, "warning");
+      ctx.ui.notify(`Unknown subcommand: ${sub}. See /batch view | list | goal | check | cancel | model | provider`, "warning");
     },
   });
 }

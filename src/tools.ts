@@ -1,15 +1,16 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { BatchStorage } from "./storage.js";
 import type { BatchPoller } from "./poller.js";
 import { OpenRouterBatchClient } from "./client.js";
+import { normalizeBatchModelSlug, resolveApiKeyForProvider } from "./models.js";
 import type { BatchJob } from "./types.js";
 
 export function registerBatchTools(
   pi: ExtensionAPI,
   storage: BatchStorage,
   poller: BatchPoller,
-  getApiKey: () => string
+  getCtx: () => ExtensionContext | null
 ): void {
   pi.registerTool({
     name: "batch_submit_goal",
@@ -22,19 +23,27 @@ export function registerBatchTools(
     parameters: Type.Object({
       prompt: Type.String({ description: "Detailed task instructions or goal prompt" }),
       model: Type.Optional(Type.String({ description: "OpenRouter model override (e.g. anthropic/claude-opus-5.5)" })),
+      provider: Type.Optional(Type.String({ description: "Provider account alias (e.g. openrouter, openrouter-default, openrouter-soukr)" })),
       title: Type.Optional(Type.String({ description: "Short descriptive title for the batch job" })),
     }),
-    execute: async (_toolCallId, params, signal) => {
+    execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
       if (signal?.aborted) {
         throw new Error("Batch submission aborted");
       }
 
-      const apiKey = getApiKey();
-      if (!apiKey) {
-        throw new Error("Missing OpenRouter API key. Set OPENROUTER_API_KEY environment variable.");
+      const prov = params.provider || storage.getConfig().defaultProvider;
+      const effectiveCtx = ctx || getCtx();
+      if (!effectiveCtx) {
+        throw new Error("ExtensionContext not available");
       }
 
-      const model = params.model || storage.getConfig().defaultModel;
+      const apiKey = await resolveApiKeyForProvider(effectiveCtx, prov);
+      if (!apiKey) {
+        throw new Error(`Missing API key for provider ${prov}. Check auth.json or OPENROUTER_API_KEY.`);
+      }
+
+      const rawModel = params.model || storage.getConfig().defaultModel;
+      const model = normalizeBatchModelSlug(rawModel);
       const title = params.title || params.prompt.slice(0, 50);
 
       const client = new OpenRouterBatchClient(apiKey);
@@ -61,6 +70,7 @@ export function registerBatchTools(
         id: res.id,
         title,
         model,
+        provider: prov,
         status: res.status,
         createdAt: Date.now(),
         totalRequests: 1,
@@ -82,10 +92,10 @@ export function registerBatchTools(
         content: [
           {
             type: "text",
-            text: `Batch job successfully queued.\nBatch ID: ${res.id}\nModel: ${model}\nStatus: ${res.status}\nResults will be saved to disk automatically upon completion. User can track progress with /batch view or /batch list.`,
+            text: `Batch job successfully queued.\nBatch ID: ${res.id}\nProvider: ${prov}\nModel: ${model}\nStatus: ${res.status}\nResults will be saved to disk automatically upon completion. User can track progress with /batch view or /batch list.`,
           },
         ],
-        details: { batchId: res.id, status: res.status, model },
+        details: { batchId: res.id, status: res.status, model, provider: prov },
       };
     },
   });
@@ -114,19 +124,20 @@ export function registerBatchTools(
           content: [
             {
               type: "text",
-              text: `Batch ID: ${job.id}\nStatus: ${job.status}\nProgress: ${job.completedRequests}/${job.totalRequests} completed (${job.failedRequests} failed)\nTitle: ${job.title}\nSaved to: ${job.outputDir || "pending"}`,
+              text: `Batch ID: ${job.id}\nProvider: ${job.provider}\nStatus: ${job.status}\nProgress: ${job.completedRequests}/${job.totalRequests} completed (${job.failedRequests} failed)\nTitle: ${job.title}\nSaved to: ${job.outputDir || "pending"}`,
             },
           ],
           details: {
             queriedId: params.batch_id,
             found: true,
             jobStatus: job.status,
+            provider: job.provider,
           },
         };
       }
 
       const jobs = storage.getJobs();
-      const summary = jobs.map((j) => `- [${j.id}] (${j.status}) ${j.completedRequests}/${j.totalRequests}: ${j.title}`).join("\n");
+      const summary = jobs.map((j) => `- [${j.id}] [${j.provider}] (${j.status}) ${j.completedRequests}/${j.totalRequests}: ${j.title}`).join("\n");
 
       return {
         content: [

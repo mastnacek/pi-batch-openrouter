@@ -86,7 +86,7 @@ export class BatchDashboardComponent implements Component {
       return lines;
     }
 
-    lines.push(`\x1b[90m  ID             Status        Progress   Model                      Title\x1b[0m`);
+    lines.push(`\x1b[90m  ID             Status        Progress   Provider/Model             Title\x1b[0m`);
     lines.push(hr);
 
     for (let i = 0; i < this.jobs.length; i++) {
@@ -97,10 +97,10 @@ export class BatchDashboardComponent implements Component {
       const idStr = job.id.slice(0, 12).padEnd(14);
       const statusStr = (statusColor + job.status.padEnd(13) + "\x1b[0m");
       const progStr = `${job.completedRequests}/${job.totalRequests}`.padEnd(10);
-      const modelShort = job.model.replace("anthropic/", "").padEnd(26);
-      const titleShort = job.title.slice(0, Math.max(10, width - 70));
+      const provModel = `[${job.provider}] ${job.model.replace("anthropic/", "")}`.slice(0, 26).padEnd(27);
+      const titleShort = job.title.slice(0, Math.max(10, width - 72));
 
-      const row = `${marker} ${idStr} ${statusStr} ${progStr} ${modelShort} ${titleShort}`;
+      const row = `${marker} ${idStr} ${statusStr} ${progStr} ${provModel} ${titleShort}`;
       if (isSelected) {
         lines.push(`\x1b[7m${row}\x1b[27m`);
       } else {
@@ -124,6 +124,7 @@ export class BatchDashboardComponent implements Component {
     lines.push(`\x1b[1;36m📦 Batch Detail: ${job.id}\x1b[0m`);
     lines.push(hr);
     lines.push(`  Title:      ${job.title}`);
+    lines.push(`  Provider:   \x1b[35m${job.provider}\x1b[0m`);
     lines.push(`  Model:      ${job.model}`);
     lines.push(`  Status:     ${this.getStatusColor(job.status)}${job.status}\x1b[0m`);
     lines.push(`  Progress:   ${job.completedRequests}/${job.totalRequests} completed (${job.failedRequests} failed)`);

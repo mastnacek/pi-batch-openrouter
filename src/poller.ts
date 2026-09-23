@@ -1,5 +1,6 @@
 import { BatchStorage } from "./storage.js";
 import { OpenRouterBatchClient, saveBatchResultsToDisk } from "./client.js";
+import { normalizeBatchModelSlug } from "./models.js";
 import type { BatchJob } from "./types.js";
 
 export type StatusChangeCallback = (badgeText: string, activeCount: number) => void;
@@ -16,7 +17,7 @@ export class BatchPoller {
 
   constructor(
     private storage: BatchStorage,
-    private getApiKey: () => string,
+    private getApiKeyForJob: (job: BatchJob) => Promise<string>,
     private onStatusChange?: StatusChangeCallback,
     private onBatchCompleted?: BatchCompletedCallback
   ) {}
@@ -54,16 +55,14 @@ export class BatchPoller {
         return;
       }
 
-      const apiKey = this.getApiKey();
-      if (!apiKey) {
-        return;
-      }
-
-      const client = new OpenRouterBatchClient(apiKey);
       const config = this.storage.getConfig();
 
       for (const job of activeJobs) {
         try {
+          const apiKey = await this.getApiKeyForJob(job);
+          if (!apiKey) continue;
+
+          const client = new OpenRouterBatchClient(apiKey);
           const detail = await client.getBatch(job.id);
           const wasCompleted = job.status !== "completed" && detail.status === "completed";
 

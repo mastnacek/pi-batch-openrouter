@@ -43,6 +43,8 @@ export default function (pi: ExtensionAPI): void {
   unsubs.push(
     pi.on("session_start", (_event, ctx) => {
       activeCtx = ctx;
+      // Rebind the config cascade to this session's project layer.
+      storage.setCwd(ctx.cwd);
       poller.start();
       poller.updateBadge();
     })

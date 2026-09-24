@@ -8,6 +8,7 @@ import { discoverBatchModels, normalizeBatchModelSlug, resolveApiKeyForProvider 
 import type { BatchJob } from "./types.js";
 
 const SUBCOMMANDS: Record<string, { desc: string; nonTerminal: boolean }> = {
+  "--global": { desc: "Save the following setting globally (~/.pi/agent/)", nonTerminal: true },
   view: { desc: "Open interactive TUI dashboard", nonTerminal: false },
   list: { desc: "List recent batches in terminal", nonTerminal: false },
   goal: { desc: "Submit an asynchronous goal prompt", nonTerminal: false },
@@ -25,7 +26,37 @@ export function registerBatchCommand(
 ): void {
   pi.registerCommand("batch", {
     description: "Manage OpenRouter asynchronous batch jobs & goals",
-    getArgumentCompletions: async (prefix: string): Promise<AutocompleteItem[] | null> => {
+    getArgumentCompletions: async function completions(
+      prefix: string,
+    ): Promise<AutocompleteItem[] | null> {
+      // `--global` prefix: complete the remainder, then re-prefix suggestions.
+      const trimmedPrefix = prefix.trimStart();
+      if (trimmedPrefix.startsWith("--global")) {
+        const afterGlobal = trimmedPrefix.slice(8).trimStart();
+        const hasTrailingSpace = trimmedPrefix.length > 8 || /\s$/.test(prefix);
+        if (!hasTrailingSpace && afterGlobal === "") {
+          return [
+            {
+              value: "--global ",
+              label: "--global",
+              description: "Save the following setting globally (~/.pi/agent/)",
+            },
+          ];
+        }
+        const sub = await completions(afterGlobal);
+        if (!sub) return null;
+        const out: AutocompleteItem[] = [];
+        for (const item of sub) {
+          if (item.label === "--global") continue;
+          out.push({
+            value: `--global ${item.value}`,
+            label: item.label,
+            description: item.description,
+          });
+        }
+        return out.length > 0 ? out : null;
+      }
+
       const tokens = prefix.split(/\s+/).filter(Boolean);
       const trailingSpace = /\s$/.test(prefix);
       const normalizedPrefix = tokens.join(" ").toLowerCase();
@@ -124,8 +155,11 @@ export function registerBatchCommand(
     },
 
     handler: async (args: string, ctx: ExtensionCommandContext) => {
-      const tokens = args.trim().split(/\s+/);
+      const rawTokens = args.trim().split(/\s+/).filter(Boolean);
+      const isGlobal = rawTokens.some((t) => t.toLowerCase() === "--global");
+      const tokens = rawTokens.filter((t) => t.toLowerCase() !== "--global");
       const sub = tokens[0]?.toLowerCase() || "view";
+      const scopeSuffix = isGlobal ? " (saved globally)" : " (saved for this project)";
       const rest = tokens.slice(1).join(" ").trim();
 
       if (sub === "view" || sub === "ui" || sub === "dashboard") {
@@ -209,8 +243,8 @@ export function registerBatchCommand(
           ctx.ui.notify(`Current default batch provider: ${curr}`, "info");
           return;
         }
-        storage.updateConfig({ defaultProvider: rest });
-        ctx.ui.notify(`Default batch provider set to: ${rest}`, "info");
+        storage.updateConfig({ defaultProvider: rest }, isGlobal);
+        ctx.ui.notify(`Default batch provider set to: ${rest}${scopeSuffix}`, "info");
         return;
       }
 
@@ -221,8 +255,8 @@ export function registerBatchCommand(
           ctx.ui.notify(`Current default batch model: ${curr} [${currP}]`, "info");
           return;
         }
-        storage.updateConfig({ defaultModel: rest });
-        ctx.ui.notify(`Default batch model set to: ${rest}`, "info");
+        storage.updateConfig({ defaultModel: rest }, isGlobal);
+        ctx.ui.notify(`Default batch model set to: ${rest}${scopeSuffix}`, "info");
         return;
       }
 
